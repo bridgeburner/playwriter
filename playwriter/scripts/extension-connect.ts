@@ -1,8 +1,7 @@
 import playwright from 'playwright-core';
 
 async function main() {
-    const uuid = process.env.CDP_UUID || '550e8400-e29b-41d4-a716-446655440000';
-    const cdpEndpoint = `ws://localhost:9988/cdp/${uuid}`
+    const cdpEndpoint = `ws://localhost:9988/cdp`
     const browser = await playwright.chromium.connectOverCDP(cdpEndpoint);
     
     const contexts = browser.contexts();

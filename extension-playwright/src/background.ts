@@ -17,7 +17,7 @@
 import { RelayConnection, debugLog } from './relayConnection';
 
 // Relay URL - fixed port for MCP bridge
-const RELAY_URL = 'ws://localhost:9988/extension/550e8400-e29b-41d4-a716-446655440000';
+const RELAY_URL = 'ws://localhost:9988/extension';
 
 class SimplifiedExtension {
   private _connection: RelayConnection | undefined;

@@ -75,9 +75,8 @@ export class CDPRelayServer {
     this._wsHost = httpAddressToString(server.address()).replace(/^http/, 'ws');
 
 
-    const uuid = process.env.CDP_UUID || crypto.randomUUID();
-    this._cdpPath = `/cdp/${uuid}`;
-    this._extensionPath = `/extension/${uuid}`;
+    this._cdpPath = `/cdp`;
+    this._extensionPath = `/extension`;
 
     this._resetExtensionConnection();
     this._wss = new wsServer({ server });
