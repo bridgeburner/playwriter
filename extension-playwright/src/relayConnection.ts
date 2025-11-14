@@ -122,7 +122,10 @@ export class RelayConnection {
 
   detachTab(tabId: number): void {
     const tab = this._attachedTabs.get(tabId);
-    if (!tab) return;
+    if (!tab) {
+      debugLog('detachTab: tab not found in map:', tabId);
+      return;
+    }
 
     debugLog('Detaching tab:', tabId, 'sessionId:', tab.sessionId);
 
@@ -137,8 +140,16 @@ export class RelayConnection {
       }
     });
 
-    chrome.debugger.detach(tab.debuggee).catch(() => {});
+    chrome.debugger.detach(tab.debuggee)
+      .then(() => {
+        debugLog('Successfully detached debugger from tab:', tabId);
+      })
+      .catch((err) => {
+        debugLog('Error detaching debugger from tab:', tabId, err.message);
+      });
+    
     this._attachedTabs.delete(tabId);
+    debugLog('Removed tab from _attachedTabs map. Remaining tabs:', this._attachedTabs.size);
   }
 
   close(message: string): void {
@@ -159,13 +170,22 @@ export class RelayConnection {
     chrome.debugger.onEvent.removeListener(this._eventListener);
     chrome.debugger.onDetach.removeListener(this._detachListener);
 
+    const tabIds = Array.from(this._attachedTabs.keys());
+    debugLog('Detaching all tabs:', tabIds);
+
     for (const [tabId, tab] of this._attachedTabs) {
       debugLog('Detaching debugger from tab:', tabId);
-      chrome.debugger.detach(tab.debuggee).catch((err) => {
-        debugLog('Error detaching debugger from tab:', tabId, err);
-      });
+      chrome.debugger.detach(tab.debuggee)
+        .then(() => {
+          debugLog('Successfully detached from tab:', tabId);
+        })
+        .catch((err) => {
+          debugLog('Error detaching from tab:', tabId, err.message);
+        });
     }
+    
     this._attachedTabs.clear();
+    debugLog('All tabs cleared from map. Chrome automation bar should disappear in a few seconds.');
 
     debugLog('Connection closed, calling onclose callback');
     this.onclose?.();
