@@ -127,21 +127,13 @@
 
 
 
-      .info-box {
-        background-color: var(--color-code-bg);
-        border-left: 4px solid var(--color-link);
-        padding: 1rem;
-        margin-bottom: 1rem;
-        border-radius: 4px;
-      }
-
       .step-number {
         color: var(--color-link);
         font-weight: 700;
         font-size: 1.125rem;
         margin-right: 0.75rem;
         flex-shrink: 0;
-        line-height: 1;
+        line-height: 1.6;
       }
 
       .step {
@@ -170,26 +162,21 @@
         <h2>Getting Started with Playwriter MCP</h2>
 
         <p>
-          Playwriter MCP enables Playwright to connect to your existing Chrome
-          instance without requiring Chrome to be started in CDP mode. This
-          allows AI assistants and automation tools to interact with your
-          browser seamlessly through the Model Context Protocol.
+          Control your browser via extension instead of spawning a full new
+          Chrome window. Uses less context window by running Playwright CDP
+          protocol directly. Collaborate with your agent and help get it
+          unstuck when needed.
         </p>
-
-        <div class="info-box">
-          <strong>Prerequisites:</strong> You need Node.js installed on your
-          system to run the Playwriter MCP server.
-        </div>
 
         <h3>Quick Start</h3>
 
         <div class="step">
           <span class="step-number">1</span>
           <div class="step-content">
-            <strong>Navigate to any webpage</strong>
+            <strong>Pin this extension on Chrome toolbar</strong>
             <p>
-              Open a tab with the website you want to control via MCP. This
-              could be any URL you want to automate or interact with.
+              Click the puzzle icon in your Chrome toolbar and pin the
+              Playwriter MCP extension for easy access.
             </p>
           </div>
         </div>
@@ -209,27 +196,24 @@
         <div class="step">
           <span class="step-number">3</span>
           <div class="step-content">
-            <strong>Run the Playwriter MCP server</strong>
+            <strong>Add the MCP to your agent</strong>
             <p>
-              Open your terminal and run the following command to start the MCP
-              server:
+              Add the following configuration to your MCP client settings (e.g.,
+              Claude Desktop's <code>claude_desktop_config.json</code>):
             </p>
-            <pre><code>npx playwriter</code></pre>
+            <pre><code>{
+  "mcpServers": {
+    "playwriter": {
+      "command": "npx",
+      "args": [
+        "playwriter"
+      ]
+    }
+  }
+}</code></pre>
             <p>
-              This will start the relay server that bridges the extension with
-              your MCP client.
-            </p>
-          </div>
-        </div>
-
-        <div class="step">
-          <span class="step-number">4</span>
-          <div class="step-content">
-            <strong>Connect your MCP client</strong>
-            <p>
-              Your MCP client (like Claude Desktop or other AI assistants) can
-              now connect to the browser and control it using Playwright
-              commands.
+              This will enable your AI assistant to control the browser through
+              the extension.
             </p>
           </div>
         </div>
