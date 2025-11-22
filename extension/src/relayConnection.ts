@@ -383,6 +383,23 @@ export class RelayConnection {
         sessionId: msg.params.sessionId !== targetTab.sessionId ? msg.params.sessionId : undefined,
       };
 
+      // CRITICAL FIX FOR PLAYWRIGHT HANGS:
+      // When Playwright connects to an existing page, it sends 'Runtime.enable' and waits for
+      // 'Runtime.executionContextCreated' events to map out available execution contexts (frames, workers).
+      //
+      // However, if the Runtime domain is already enabled or if Chrome doesn't re-emit these events
+      // for existing contexts upon a standard 'Runtime.enable' call, Playwright never gets the
+      // context IDs it needs. This causes commands like `page.evaluate()` to hang indefinitely
+      // because Playwright is waiting for a context that it believes hasn't been created yet.
+      //
+      // To fix this, we intercept 'Runtime.enable' and force a reset:
+      // 1. We send 'Runtime.disable'. This clears Chrome's internal Runtime state for this session.
+      // 2. We wait a brief moment (50ms) to ensure the disable command propagates.
+      // 3. Then we allow the original 'Runtime.enable' command to proceed.
+      //
+      // This sequence forces Chrome to treat the enablement as a fresh start, causing it to
+      // re-scan and emit 'Runtime.executionContextCreated' events for ALL existing contexts.
+      // Playwright receives these events, populates its context map, and the hang is resolved.
       if (msg.params.method === 'Runtime.enable') {
         logger.debug('Runtime.enable called, disabling first to force context refresh for tab:', targetTab.debuggee.tabId);
         try {
