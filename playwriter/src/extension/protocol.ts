@@ -1,20 +1,26 @@
+import { CDPCommand, CDPEvent, ProtocolMapping } from '../cdp-types.js'
+
 export const VERSION = 1
+
+type ForwardCDPCommand =
+  {
+    [K in keyof ProtocolMapping.Commands]: {
+      id: number
+      method: 'forwardCDPCommand'
+      params: {
+        method: K
+        sessionId?: string
+        params?: ProtocolMapping.Commands[K]['paramsType'][0]
+      }
+    }
+  }[keyof ProtocolMapping.Commands]
 
 export type ExtensionCommandMessage =
   | {
       id: number
       method: 'attachToTab'
-      params?: object
     }
-  | {
-      id: number
-      method: 'forwardCDPCommand'
-      params: {
-        method: string
-        sessionId?: string
-        params?: any
-      }
-    }
+  | ForwardCDPCommand
 
 export type ExtensionResponseMessage = {
   id: number
@@ -22,13 +28,20 @@ export type ExtensionResponseMessage = {
   error?: string
 }
 
-export type ExtensionEventMessage = {
-  method: 'forwardCDPEvent'
-  params: {
-    method: string
-    sessionId?: string
-    params?: any
-  }
-}
+/**
+ * This produces a discriminated union for narrowing, similar to ForwardCDPCommand,
+ * but for forwarded CDP events. Uses CDPEvent to maintain proper type extraction.
+ */
+export type ExtensionEventMessage =
+  {
+    [K in keyof ProtocolMapping.Events]: {
+      method: 'forwardCDPEvent'
+      params: {
+        method: CDPEvent<K>['method']
+        sessionId?: string
+        params?: CDPEvent<K>['params']
+      }
+    }
+  }[keyof ProtocolMapping.Events]
 
 export type ExtensionMessage = ExtensionResponseMessage | ExtensionEventMessage
