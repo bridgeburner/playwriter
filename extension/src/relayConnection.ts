@@ -222,7 +222,7 @@ export class RelayConnection {
     this._onCloseCallback?.();
   }
 
-  private _onDebuggerEvent = (source: chrome.debugger.DebuggerSession, method: string, params: any): void => {
+  private _onDebuggerEvent = (source: chrome.debugger.DebuggerSession, method: CDPEvent['method'], params: any): void => {
     const tab = this._attachedTabs.get(source.tabId!);
     if (!tab) return;
 
