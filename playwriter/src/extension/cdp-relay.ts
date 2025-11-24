@@ -234,6 +234,18 @@ export async function startPlayWriterCDPRelayServer({ port = 19988, host = '127.
     return c.text('OK')
   })
 
+  app.post('/mcp-log', async (c) => {
+    try {
+      const { level, args } = await c.req.json()
+      const logFn = (logger as any)[level] || logger.log
+      const prefix = chalk.red(`[MCP] [${level.toUpperCase()}]`)
+      logFn(prefix, ...args)
+      return c.json({ ok: true })
+    } catch {
+      return c.json({ ok: false }, 400)
+    }
+  })
+
   app.get('/cdp/:clientId?', upgradeWebSocket((c) => {
     const clientId = c.req.param('clientId') || 'default'
 

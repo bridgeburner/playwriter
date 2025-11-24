@@ -67,7 +67,7 @@ type VMContextWithGlobals = VMContext & typeof usefulGlobals
 
 type SelectorGenerator = typeof import('@mizchi/selector-generator')
 
-const mcpState: State = {
+const state: State = {
   isConnected: false,
   page: null,
   browser: null,
@@ -88,10 +88,23 @@ function clearUserState() {
 }
 
 function clearConnectionState() {
-  mcpState.isConnected = false
-  mcpState.browser = null
-  mcpState.page = null
-  mcpState.context = null
+  state.isConnected = false
+  state.browser = null
+  state.page = null
+  state.context = null
+}
+
+async function sendLogToRelayServer(level: string, ...args: any[]) {
+  try {
+    await fetch(`http://localhost:${RELAY_PORT}/mcp-log`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ level, args }),
+      signal: AbortSignal.timeout(1000),
+    })
+  } catch {
+    // Silently fail if relay server is not available
+  }
 }
 
 async function isPortTaken(port: number): Promise<boolean> {
@@ -136,8 +149,8 @@ async function ensureRelayServer(): Promise<void> {
 }
 
 async function ensureConnection(): Promise<{ browser: Browser; page: Page }> {
-  if (mcpState.isConnected && mcpState.browser && mcpState.page) {
-    return { browser: mcpState.browser, page: mcpState.page }
+  if (state.isConnected && state.browser && state.page) {
+    return { browser: state.browser, page: state.page }
   }
 
   await ensureRelayServer()
@@ -162,10 +175,10 @@ async function ensureConnection(): Promise<{ browser: Browser; page: Page }> {
   // Set up console listener for all existing pages
   context.pages().forEach(p => setupPageConsoleListener(p))
 
-  mcpState.browser = browser
-  mcpState.page = page
-  mcpState.context = context
-  mcpState.isConnected = true
+  state.browser = browser
+  state.page = page
+  state.context = context
+  state.isConnected = true
 
   return { browser, page }
 }
@@ -237,12 +250,12 @@ function setupPageConsoleListener(page: Page) {
 }
 
 async function getCurrentPage(timeout = 5000) {
-  if (mcpState.page) {
-    return mcpState.page
+  if (state.page) {
+    return state.page
   }
 
-  if (mcpState.browser) {
-    const contexts = mcpState.browser.contexts()
+  if (state.browser) {
+    const contexts = state.browser.contexts()
     if (contexts.length > 0) {
       const pages = contexts[0].pages()
 
@@ -259,9 +272,9 @@ async function getCurrentPage(timeout = 5000) {
 }
 
 async function resetConnection(): Promise<{ browser: Browser; page: Page; context: BrowserContext }> {
-  if (mcpState.browser) {
+  if (state.browser) {
     try {
-      await mcpState.browser.close()
+      await state.browser.close()
     } catch (e) {
       console.error('Error closing browser:', e)
     }
@@ -295,10 +308,10 @@ async function resetConnection(): Promise<{ browser: Browser; page: Page; contex
   // Set up console listener for all existing pages
   context.pages().forEach(p => setupPageConsoleListener(p))
 
-  mcpState.browser = browser
-  mcpState.page = page
-  mcpState.context = context
-  mcpState.isConnected = true
+  state.browser = browser
+  state.page = page
+  state.context = context
+  state.isConnected = true
 
   return { browser, page, context }
 }
@@ -328,7 +341,7 @@ server.tool(
       await ensureConnection()
 
       const page = await getCurrentPage(timeout)
-      const context = mcpState.context || page.context()
+      const context = state.context || page.context()
 
       console.error('Executing code:', code)
       const consoleLogs: Array<{ method: string; args: any[] }> = []
@@ -562,7 +575,10 @@ server.tool(
         ],
       }
     } catch (error: any) {
-      console.error('Error in execute tool, attempting reset:', error.message)
+      const errorStack = error.stack || error.message
+      console.error('Error in execute tool, attempting reset:', errorStack)
+      await sendLogToRelayServer('error', '[MCP] CRITICAL ERROR - Connection reset triggered:', errorStack)
+      
       try {
         await resetConnection()
         return {
@@ -574,11 +590,12 @@ server.tool(
           ],
         }
       } catch (resetError: any) {
+        await sendLogToRelayServer('error', '[MCP] CRITICAL ERROR - Reset failed:', resetError.stack || resetError.message)
         return {
           content: [
             {
               type: 'text',
-              text: `Error executing code: ${error.message}\n${error.stack || ''}`,
+              text: `Error executing code: ${error.message}\n${errorStack}`,
             },
           ],
           isError: true,
