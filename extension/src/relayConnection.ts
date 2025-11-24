@@ -125,7 +125,7 @@ export class RelayConnection {
         return
       }
 
-      logger.debug('Received message:', message)
+      // logger.debug('Received message:', message)
 
       const response: ExtensionResponseMessage = {
         id: message.id,
