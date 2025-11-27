@@ -90,6 +90,14 @@ always use kebab case for new filenames. never use uppercase letters in filename
 
 use `git ls-files | tree --fromfile` to see files in the repo. this command will ignore files ignored by git
 
+## count tokens of a file
+
+use uvx with tiktoken to count tokens:
+
+```bash
+uvx --from tiktoken python -c "import tiktoken; enc = tiktoken.get_encoding('cl100k_base'); print(len(enc.encode(open('path/to/file').read())))"
+```
+
 ## handling unexpected file contents after a read or write
 
 if you find code that was not there since the last time you read the file it means the user or another agent edited the file. do not revert the changes that were added. instead keep them and integrate them with your new changes
