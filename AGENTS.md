@@ -90,14 +90,6 @@ always use kebab case for new filenames. never use uppercase letters in filename
 
 use `git ls-files | tree --fromfile` to see files in the repo. this command will ignore files ignored by git
 
-## count tokens of a file
-
-use uvx with tiktoken to count tokens:
-
-```bash
-uvx --from tiktoken python -c "import tiktoken; enc = tiktoken.get_encoding('cl100k_base'); print(len(enc.encode(open('path/to/file').read())))"
-```
-
 ## handling unexpected file contents after a read or write
 
 if you find code that was not there since the last time you read the file it means the user or another agent edited the file. do not revert the changes that were added. instead keep them and integrate them with your new changes
@@ -412,15 +404,25 @@ gh run view <id> --log-failed | tail -n 300 # read the logs for failed steps in 
 gh run view <id> --log | tail -n 300 # read all logs for a github actions run
 ```
 
-## reading github repositories
+## listing, searching, reading github repos files with gitchamber
 
-you can use gitchamber.com to read repo files. run `curl https://gitchamber.com` to see how the API works. always use curl to fetch the responses of gitchamber.com
+you MUST use gitchamber.com to read repo files. first ALWAYS run `curl https://gitchamber.com` to read detailed usage docs. always use curl to fetch the responses of gitchamber.com
 
 for example when working with the vercel ai sdk, you can fetch the latest docs using:
 
-https://gitchamber.com/repos/repos/vercel/ai/main/files
+https://gitchamber.com/repos/facebook/react/main/files
 
-use gitchamber to read the .md files using curl
+https://gitchamber.com/repos/remorses/fumabase/main/files?glob=**/*.ts
+
+https://gitchamber.com/repos/facebook/react/main/files/README.md?start=10&end=50
+
+https://gitchamber.com/repos/facebook/react/main/search/useState
+
+gitchamber allows you to list, search and read files in a repo. you MUST use it over alternatives likes raw.github.com, because 
+- it allows you to use context usage better via limit and offset pagination
+- it can list files, even filtering by a specific glob (default is *.md and *.mdx)
+- it can search a repo for a specific substring
+- it can show the code with line numbers for each line, letting you find a specific line number
 
 # playwright
 
