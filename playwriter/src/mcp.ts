@@ -4,6 +4,7 @@ import { z } from 'zod'
 import { Page, Browser, BrowserContext, chromium } from 'playwright-core'
 import fs from 'node:fs'
 import path from 'node:path'
+import os from 'node:os'
 import { spawn } from 'node:child_process'
 import { createRequire } from 'node:module'
 import { fileURLToPath } from 'node:url'
@@ -84,6 +85,7 @@ const MAX_LOGS_PER_PAGE = 5000
 const lastSnapshots: WeakMap<Page, string> = new WeakMap()
 
 const RELAY_PORT = 19988
+const LOG_FILE_PATH = process.env.PLAYWRITER_LOG_PATH || path.join(os.tmpdir(), 'playwriter-relay-server.log')
 const NO_TABS_ERROR = `No browser tabs are connected. Please install and enable the Playwriter extension on at least one tab: https://chromewebstore.google.com/detail/playwriter-mcp/jfeammnjpkecdekppnclgkkffahnhfhe`
 
 function isRegExp(value: any): value is RegExp {
@@ -152,7 +154,7 @@ async function ensureRelayServer(): Promise<void> {
     }
   }
 
-  throw new Error('Failed to start CDP relay server after 5 seconds')
+  throw new Error(`Failed to start CDP relay server after 5 seconds. Check logs at: ${LOG_FILE_PATH}`)
 }
 
 async function ensureConnection(): Promise<{ browser: Browser; page: Page }> {
@@ -329,7 +331,7 @@ const server = new McpServer({
   version: '1.0.0',
 })
 
-const promptContent = fs.readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), 'prompt.md'), 'utf-8')
+const promptContent = fs.readFileSync(path.join(path.dirname(fileURLToPath(import.meta.url)), 'prompt.md'), 'utf-8') + `\n\nfor debugging errors, check relay server logs at: ${LOG_FILE_PATH}`
 
 server.tool(
   'execute',

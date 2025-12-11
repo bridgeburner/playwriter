@@ -8,6 +8,7 @@ import fs from 'node:fs'
 import os from 'node:os'
 import { getCdpUrl } from './utils.js'
 import type { ExtensionState } from 'mcp-extension/src/types.js'
+import type { Protocol } from 'devtools-protocol'
 
 import { spawn } from 'node:child_process'
 
@@ -15,10 +16,7 @@ import { spawn } from 'node:child_process'
 const execAsync = promisify(exec)
 
 async function getExtensionServiceWorker(context: BrowserContext) {
-
     let serviceWorkers = context.serviceWorkers().filter(sw => sw.url().startsWith('chrome-extension://'))
-
-
     let serviceWorker = serviceWorkers[0]
     if (!serviceWorker) {
         serviceWorker = await context.waitForEvent('serviceworker', {
@@ -26,6 +24,14 @@ async function getExtensionServiceWorker(context: BrowserContext) {
         })
     }
 
+    for (let i = 0; i < 50; i++) {
+        const isReady = await serviceWorker.evaluate(() => {
+            // @ts-ignore
+            return typeof globalThis.toggleExtensionForActiveTab === 'function'
+        })
+        if (isReady) break
+        await new Promise(r => setTimeout(r, 100))
+    }
 
     return serviceWorker
 }
@@ -51,6 +57,91 @@ async function killProcessOnPort(port: number): Promise<void> {
     }
 }
 
+interface TestContext {
+    browserContext: Awaited<ReturnType<typeof chromium.launchPersistentContext>>
+    userDataDir: string
+    relayServerProcess: ReturnType<typeof spawn>
+}
+
+async function setupTestContext({ tempDirPrefix }: { tempDirPrefix: string }): Promise<TestContext> {
+    await killProcessOnPort(19988)
+
+    console.log('Building extension...')
+    await execAsync('TESTING=1 pnpm build', { cwd: '../extension' })
+    console.log('Extension built')
+
+    const localLogPath = path.join(process.cwd(), 'relay-server.log')
+    const relayServerProcess = spawn('pnpm', ['tsx', 'src/start-relay-server.ts'], {
+        cwd: process.cwd(),
+        stdio: 'inherit',
+        env: { ...process.env, PLAYWRITER_LOG_PATH: localLogPath }
+    })
+
+    await new Promise<void>((resolve, reject) => {
+        let retries = 0
+        const interval = setInterval(async () => {
+            try {
+                const { stdout } = await execAsync('lsof -ti:19988')
+                if (stdout.trim()) {
+                    clearInterval(interval)
+                    resolve()
+                }
+            } catch {
+                // ignore
+            }
+            retries++
+            if (retries > 30) {
+                clearInterval(interval)
+                reject(new Error('Relay server failed to start'))
+            }
+        }, 1000)
+    })
+
+    const userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), tempDirPrefix))
+    const extensionPath = path.resolve('../extension/dist')
+
+    const browserContext = await chromium.launchPersistentContext(userDataDir, {
+        channel: 'chromium',
+        headless: !process.env.HEADFUL,
+        args: [
+            `--disable-extensions-except=${extensionPath}`,
+            `--load-extension=${extensionPath}`,
+        ],
+    })
+
+    const serviceWorker = await getExtensionServiceWorker(browserContext)
+
+    const page = await browserContext.newPage()
+    await page.goto('about:blank')
+
+    await serviceWorker.evaluate(async () => {
+        await globalThis.toggleExtensionForActiveTab()
+    })
+
+    return { browserContext, userDataDir, relayServerProcess }
+}
+
+async function cleanupTestContext(ctx: TestContext | null, cleanup?: (() => Promise<void>) | null): Promise<void> {
+    if (ctx?.browserContext) {
+        await ctx.browserContext.close()
+    }
+    if (ctx?.relayServerProcess) {
+        ctx.relayServerProcess.kill()
+    }
+    await killProcessOnPort(19988)
+
+    if (ctx?.userDataDir) {
+        try {
+            fs.rmSync(ctx.userDataDir, { recursive: true, force: true })
+        } catch (e) {
+            console.error('Failed to cleanup user data dir:', e)
+        }
+    }
+    if (cleanup) {
+        await cleanup()
+    }
+}
+
 declare global {
     var toggleExtensionForActiveTab: () => Promise<{ isConnected: boolean; state: ExtensionState }>;
     var getExtensionState: () => ExtensionState;
@@ -60,106 +151,26 @@ declare global {
 describe('MCP Server Tests', () => {
     let client: Awaited<ReturnType<typeof createMCPClient>>['client']
     let cleanup: (() => Promise<void>) | null = null
-    let browserContext: Awaited<ReturnType<typeof chromium.launchPersistentContext>> | null = null
-    let userDataDir: string
-    let relayServerProcess: any
+    let testCtx: TestContext | null = null
 
     beforeAll(async () => {
-        await killProcessOnPort(19988)
-
-        // Build extension
-        console.log('Building extension...')
-        await execAsync('TESTING=1 pnpm build', { cwd: '../extension' })
-        console.log('Extension built')
-
-        // Start Relay Server manually
-        relayServerProcess = spawn('pnpm', ['tsx', 'src/start-relay-server.ts'], {
-            cwd: process.cwd(),
-            stdio: 'inherit'
-        })
-
-        // Wait for port 19988 to be ready
-        await new Promise<void>((resolve, reject) => {
-             let retries = 0
-             const interval = setInterval(async () => {
-                 try {
-                     const { stdout } = await execAsync('lsof -ti:19988')
-                     if (stdout.trim()) {
-                         clearInterval(interval)
-                         resolve()
-                     }
-                 } catch {
-                     // ignore
-                 }
-                 retries++
-                 if (retries > 30) {
-                     clearInterval(interval)
-                     reject(new Error('Relay server failed to start'))
-                 }
-             }, 1000)
-        })
+        testCtx = await setupTestContext({ tempDirPrefix: 'pw-test-' })
 
         const result = await createMCPClient()
         client = result.client
         cleanup = result.cleanup
-
-        userDataDir = fs.mkdtempSync(path.join(os.tmpdir(), 'pw-test-'))
-        const extensionPath = path.resolve('../extension/dist')
-
-        browserContext = await chromium.launchPersistentContext(userDataDir, {
-          channel: 'chromium', // <- this opts into new headless
-          headless: !process.env.HEADFUL,
-            args: [
-                `--disable-extensions-except=${extensionPath}`,
-                `--load-extension=${extensionPath}`,
-            ],
-        })
-
-        // Wait for service worker and connect
-        const serviceWorker = await getExtensionServiceWorker(browserContext)
-
-        // Wait for extension to initialize global functions
-        for (let i = 0; i < 50; i++) {
-             const isReady = await serviceWorker.evaluate(() => {
-                 // @ts-ignore
-                 return typeof globalThis.toggleExtensionForActiveTab === 'function'
-             })
-             if (isReady) break
-             await new Promise(r => setTimeout(r, 100))
-        }
-
-        // Create a page to attach to
-        const page = await browserContext.newPage()
-        await page.goto('about:blank')
-
-        // Connect the tab
-        await serviceWorker.evaluate(async () => {
-             await globalThis.toggleExtensionForActiveTab()
-        })
-
-    }, 600000) // 10 minutes timeout
+    }, 600000)
 
     afterAll(async () => {
-        if (browserContext) {
-            await browserContext.close()
-        }
-        if (relayServerProcess) {
-            relayServerProcess.kill()
-        }
-        await killProcessOnPort(19988)
-
-        if (userDataDir) {
-             try {
-                fs.rmSync(userDataDir, { recursive: true, force: true })
-            } catch (e) {
-                console.error('Failed to cleanup user data dir:', e)
-            }
-        }
-        if (cleanup) {
-            await cleanup()
-            cleanup = null
-        }
+        await cleanupTestContext(testCtx, cleanup)
+        cleanup = null
+        testCtx = null
     })
+
+    const getBrowserContext = () => {
+        if (!testCtx?.browserContext) throw new Error('Browser not initialized')
+        return testCtx.browserContext
+    }
 
     it('should execute code and capture console output', async () => {
         await client.callTool({
@@ -204,7 +215,7 @@ describe('MCP Server Tests', () => {
     }, 30000)
 
     it('should show extension as connected for pages created via newPage()', async () => {
-        if (!browserContext) throw new Error('Browser not initialized')
+        const browserContext = getBrowserContext()
         const serviceWorker = await getExtensionServiceWorker(browserContext)
 
         // Create a page via MCP (which uses context.newPage())
@@ -341,9 +352,7 @@ describe('MCP Server Tests', () => {
     })
 
     it('should handle new pages and toggling with new connections', async () => {
-        if (!browserContext) throw new Error('Browser not initialized')
-
-        // Find the correct service worker by URL
+        const browserContext = getBrowserContext()
         const serviceWorker = await getExtensionServiceWorker(browserContext)
 
         // 1. Create a new page
@@ -430,8 +439,7 @@ describe('MCP Server Tests', () => {
     })
 
     it('should handle new pages and toggling with persistent connection', async () => {
-        if (!browserContext) throw new Error('Browser not initialized')
-
+        const browserContext = getBrowserContext()
         const serviceWorker = await getExtensionServiceWorker(browserContext)
 
         // Connect once
@@ -502,7 +510,7 @@ describe('MCP Server Tests', () => {
         await directBrowser.close()
     })
     it('should maintain connection across reloads and navigation', async () => {
-        if (!browserContext) throw new Error('Browser not initialized')
+        const browserContext = getBrowserContext()
         const serviceWorker = await getExtensionServiceWorker(browserContext)
 
         // 1. Setup page
@@ -551,93 +559,7 @@ describe('MCP Server Tests', () => {
     })
 
     it('should support multiple concurrent tabs', async () => {
-        if (!browserContext) throw new Error('Browser not initialized')
-        const serviceWorker = await getExtensionServiceWorker(browserContext)
-        await new Promise(resolve => setTimeout(resolve, 500))
-
-        // Tab A
-        const pageA = await browserContext.newPage()
-        await pageA.goto('https://example.com/tab-a')
-        await pageA.bringToFront()
-        await new Promise(resolve => setTimeout(resolve, 500))
-        await serviceWorker.evaluate(async () => {
-            await globalThis.toggleExtensionForActiveTab()
-        })
-
-        // Tab B
-        const pageB = await browserContext.newPage()
-        await pageB.goto('https://example.com/tab-b')
-        await pageB.bringToFront()
-        await new Promise(resolve => setTimeout(resolve, 500))
-        await serviceWorker.evaluate(async () => {
-            await globalThis.toggleExtensionForActiveTab()
-        })
-
-        // Get target IDs for both
-        const targetIds = await serviceWorker.evaluate(async () => {
-             const state = globalThis.getExtensionState()
-             const chrome = globalThis.chrome
-             const tabs = await chrome.tabs.query({})
-             const tabA = tabs.find((t: any) => t.url?.includes('tab-a'))
-             const tabB = tabs.find((t: any) => t.url?.includes('tab-b'))
-             return {
-                 idA: state.tabs.get(tabA?.id ?? -1)?.targetId,
-                 idB: state.tabs.get(tabB?.id ?? -1)?.targetId
-             }
-        })
-
-        expect(targetIds).toMatchInlineSnapshot({
-            idA: expect.any(String),
-            idB: expect.any(String)
-        }, `
-          {
-            "idA": Any<String>,
-            "idB": Any<String>,
-          }
-        `)
-        expect(targetIds.idA).not.toBe(targetIds.idB)
-
-        // Verify independent connections
-        const browser = await chromium.connectOverCDP(getCdpUrl())
-
-        const pages = browser.contexts()[0].pages()
-
-        const results = await Promise.all(pages.map(async (p) => ({
-            url: p.url(),
-            title: await p.title()
-        })))
-
-        expect(results).toMatchInlineSnapshot(`
-          [
-            {
-              "title": "",
-              "url": "about:blank",
-            },
-            {
-              "title": "Example Domain",
-              "url": "https://example.com/tab-a",
-            },
-            {
-              "title": "Example Domain",
-              "url": "https://example.com/tab-b",
-            },
-          ]
-        `)
-
-        // Verify execution on both pages
-        const pageA_CDP = pages.find(p => p.url().includes('tab-a'))
-        const pageB_CDP = pages.find(p => p.url().includes('tab-b'))
-
-        expect(await pageA_CDP?.evaluate(() => 10 + 10)).toBe(20)
-        expect(await pageB_CDP?.evaluate(() => 20 + 20)).toBe(40)
-
-        await browser.close()
-        await pageA.close()
-        await pageB.close()
-    })
-
-    it('should support multiple concurrent tabs', async () => {
-        if (!browserContext) throw new Error('Browser not initialized')
+        const browserContext = getBrowserContext()
         const serviceWorker = await getExtensionServiceWorker(browserContext)
         await new Promise(resolve => setTimeout(resolve, 500))
 
@@ -723,10 +645,9 @@ describe('MCP Server Tests', () => {
     })
 
     it('should show correct url when enabling extension after navigation', async () => {
-        if (!browserContext) throw new Error('Browser not initialized')
+        const browserContext = getBrowserContext()
         const serviceWorker = await getExtensionServiceWorker(browserContext)
 
-        // 1. Open a new page (extension not yet enabled for it)
         const page = await browserContext.newPage()
         const targetUrl = 'https://example.com/late-enable'
         await page.goto(targetUrl)
@@ -755,10 +676,9 @@ describe('MCP Server Tests', () => {
     })
 
     it('should be able to reconnect after disconnecting everything', async () => {
-        if (!browserContext) throw new Error('Browser not initialized')
+        const browserContext = getBrowserContext()
         const serviceWorker = await getExtensionServiceWorker(browserContext)
 
-        // 1. Use the existing about:blank page from beforeAll
         const pages = await browserContext.pages()
         expect(pages.length).toBeGreaterThan(0)
         const page = pages[0]
@@ -1233,7 +1153,7 @@ describe('MCP Server Tests', () => {
     }, 30000)
 
     it('should maintain correct page.url() with service worker pages', async () => {
-        if (!browserContext) throw new Error('Browser not initialized')
+        const browserContext = getBrowserContext()
         const serviceWorker = await getExtensionServiceWorker(browserContext)
 
         const page = await browserContext.newPage()
@@ -1260,7 +1180,7 @@ describe('MCP Server Tests', () => {
     }, 30000)
 
     it('should maintain correct page.url() after repeated connections', async () => {
-        if (!browserContext) throw new Error('Browser not initialized')
+        const browserContext = getBrowserContext()
         const serviceWorker = await getExtensionServiceWorker(browserContext)
 
         const page = await browserContext.newPage()
@@ -1288,7 +1208,7 @@ describe('MCP Server Tests', () => {
     }, 30000)
 
     it('should maintain correct page.url() with concurrent MCP and CDP connections', async () => {
-        if (!browserContext) throw new Error('Browser not initialized')
+        const browserContext = getBrowserContext()
         const serviceWorker = await getExtensionServiceWorker(browserContext)
 
         const page = await browserContext.newPage()
@@ -1328,7 +1248,7 @@ describe('MCP Server Tests', () => {
     }, 30000)
 
     it('should maintain correct page.url() with iframe-heavy pages', async () => {
-        if (!browserContext) throw new Error('Browser not initialized')
+        const browserContext = getBrowserContext()
         const serviceWorker = await getExtensionServiceWorker(browserContext)
 
         const page = await browserContext.newPage()
@@ -1358,7 +1278,7 @@ describe('MCP Server Tests', () => {
     }, 60000)
 
     it('should work with stagehand', async () => {
-        if (!browserContext) throw new Error('Browser not initialized')
+        const browserContext = getBrowserContext()
         const serviceWorker = await getExtensionServiceWorker(browserContext)
 
         await serviceWorker.evaluate(async () => {
@@ -1421,3 +1341,260 @@ function tryJsonParse(str: string) {
         return str
     }
 }
+
+describe('CDP Session Tests', () => {
+    let testCtx: TestContext | null = null
+
+    beforeAll(async () => {
+        testCtx = await setupTestContext({ tempDirPrefix: 'pw-cdp-test-' })
+    }, 600000)
+
+    afterAll(async () => {
+        await cleanupTestContext(testCtx)
+        testCtx = null
+    })
+
+    const getBrowserContext = () => {
+        if (!testCtx?.browserContext) throw new Error('Browser not initialized')
+        return testCtx.browserContext
+    }
+
+    it('should enable debugger and pause on debugger statement via CDP session', async () => {
+        const browserContext = getBrowserContext()
+        const page = await browserContext.newPage()
+        await page.goto('https://example.com/')
+
+        const cdpSession = await page.context().newCDPSession(page)
+        await cdpSession.send('Debugger.enable')
+
+        const pausedPromise = new Promise<Protocol.Debugger.PausedEvent>((resolve) => {
+            cdpSession.once('Debugger.paused', (params) => {
+                resolve(params as Protocol.Debugger.PausedEvent)
+            })
+        })
+
+        page.evaluate(`
+            (function testFunction() {
+                const localVar = 'hello';
+                const numberVar = 42;
+                const objVar = { key: 'value', nested: { a: 1 } };
+                debugger;
+                return localVar + numberVar;
+            })()
+        `)
+
+        const pausedEvent = await Promise.race([
+            pausedPromise,
+            new Promise<never>((_, reject) => setTimeout(() => reject(new Error('Debugger.paused timeout')), 5000))
+        ])
+
+        const stackTrace = pausedEvent.callFrames.map(frame => ({
+            functionName: frame.functionName || '(anonymous)',
+            lineNumber: frame.location.lineNumber,
+            columnNumber: frame.location.columnNumber,
+        }))
+
+        expect({
+            reason: pausedEvent.reason,
+            stackTrace: stackTrace.slice(0, 3),
+        }).toMatchInlineSnapshot(`
+          {
+            "reason": "other",
+            "stackTrace": [
+              {
+                "columnNumber": 16,
+                "functionName": "testFunction",
+                "lineNumber": 4,
+              },
+              {
+                "columnNumber": 14,
+                "functionName": "(anonymous)",
+                "lineNumber": 6,
+              },
+              {
+                "columnNumber": 29,
+                "functionName": "evaluate",
+                "lineNumber": 289,
+              },
+            ],
+          }
+        `)
+
+        const topFrame = pausedEvent.callFrames[0]
+        const scopeChain = topFrame.scopeChain
+
+        const localScope = scopeChain.find(s => s.type === 'local')
+        const localVars: Record<string, unknown> = {}
+
+        if (localScope?.object.objectId) {
+            const { result } = await cdpSession.send('Runtime.getProperties', {
+                objectId: localScope.object.objectId,
+                ownProperties: true,
+            }) as { result: Protocol.Runtime.PropertyDescriptor[] }
+
+            for (const prop of result) {
+                if (prop.value) {
+                    localVars[prop.name] = prop.value.type === 'object'
+                        ? `[object ${prop.value.className || prop.value.subtype || 'Object'}]`
+                        : prop.value.value
+                }
+            }
+        }
+
+        expect({
+            scopeTypes: scopeChain.map(s => s.type),
+            localVariables: localVars,
+        }).toMatchInlineSnapshot(`
+          {
+            "localVariables": {
+              "localVar": "hello",
+              "numberVar": 42,
+              "objVar": "[object Object]",
+            },
+            "scopeTypes": [
+              "local",
+              "global",
+            ],
+          }
+        `)
+
+        const evalResult = await cdpSession.send('Debugger.evaluateOnCallFrame', {
+            callFrameId: topFrame.callFrameId,
+            expression: 'localVar + " world " + numberVar',
+        }) as { result: Protocol.Runtime.RemoteObject }
+
+        expect({
+            evaluatedExpression: 'localVar + " world " + numberVar',
+            result: evalResult.result.value,
+            type: evalResult.result.type,
+        }).toMatchInlineSnapshot(`
+          {
+            "evaluatedExpression": "localVar + " world " + numberVar",
+            "result": "hello world 42",
+            "type": "string",
+          }
+        `)
+
+        await cdpSession.send('Debugger.resume')
+        await cdpSession.send('Debugger.disable')
+        await cdpSession.detach()
+        await page.close()
+    }, 30000)
+
+    it('should profile JavaScript execution using CDP Profiler', async () => {
+        const browserContext = getBrowserContext()
+        const page = await browserContext.newPage()
+        await page.goto('https://example.com/')
+
+        const cdpSession = await page.context().newCDPSession(page)
+        await cdpSession.send('Profiler.enable')
+        await cdpSession.send('Profiler.start')
+
+        await page.evaluate(`
+            (() => {
+                function fibonacci(n) {
+                    if (n <= 1) return n
+                    return fibonacci(n - 1) + fibonacci(n - 2)
+                }
+                for (let i = 0; i < 5; i++) {
+                    fibonacci(20)
+                }
+                for (let i = 0; i < 1000; i++) {
+                    document.querySelectorAll('*')
+                }
+            })()
+        `)
+
+        const { profile } = await cdpSession.send('Profiler.stop') as { profile: Protocol.Profiler.Profile }
+
+        const functionNames = profile.nodes
+            .map(n => n.callFrame.functionName)
+            .filter(name => name && name.length > 0)
+            .slice(0, 10)
+
+        expect({
+            hasNodes: profile.nodes.length > 0,
+            nodeCount: profile.nodes.length,
+            durationMicroseconds: profile.endTime - profile.startTime,
+            sampleFunctionNames: functionNames,
+        }).toMatchInlineSnapshot(`
+          {
+            "durationMicroseconds": 7595,
+            "hasNodes": true,
+            "nodeCount": 5,
+            "sampleFunctionNames": [
+              "(root)",
+              "(program)",
+              "(idle)",
+              "evaluate",
+            ],
+          }
+        `)
+
+        await cdpSession.send('Profiler.disable')
+        await cdpSession.detach()
+        await page.close()
+    }, 30000)
+
+    it('should capture performance metrics via CDP Performance domain', async () => {
+        const browserContext = getBrowserContext()
+        const page = await browserContext.newPage()
+        await page.goto('https://example.com/')
+
+        const cdpSession = await page.context().newCDPSession(page)
+        await cdpSession.send('Performance.enable')
+
+        const { metrics } = await cdpSession.send('Performance.getMetrics') as { metrics: Protocol.Performance.Metric[] }
+
+        const selectedMetrics = metrics
+            .filter(m => ['Documents', 'Nodes', 'JSEventListeners', 'LayoutCount', 'ScriptDuration', 'JSHeapUsedSize'].includes(m.name))
+            .map(m => ({
+                name: m.name,
+                hasValue: typeof m.value === 'number',
+                valueType: typeof m.value,
+            }))
+
+        expect(selectedMetrics).toMatchInlineSnapshot(`
+          [
+            {
+              "hasValue": true,
+              "name": "Documents",
+              "valueType": "number",
+            },
+            {
+              "hasValue": true,
+              "name": "JSEventListeners",
+              "valueType": "number",
+            },
+            {
+              "hasValue": true,
+              "name": "Nodes",
+              "valueType": "number",
+            },
+            {
+              "hasValue": true,
+              "name": "LayoutCount",
+              "valueType": "number",
+            },
+            {
+              "hasValue": true,
+              "name": "ScriptDuration",
+              "valueType": "number",
+            },
+            {
+              "hasValue": true,
+              "name": "JSHeapUsedSize",
+              "valueType": "number",
+            },
+          ]
+        `)
+
+        const metricNames = metrics.map(m => m.name)
+        expect(metricNames).toContain('JSHeapUsedSize')
+        expect(metricNames).toContain('JSHeapTotalSize')
+
+        await cdpSession.send('Performance.disable')
+        await cdpSession.detach()
+        await page.close()
+    }, 30000)
+})

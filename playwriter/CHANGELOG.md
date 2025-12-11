@@ -1,5 +1,11 @@
 # Changelog
 
+## 0.0.17
+
+### Patch Changes
+
+- **Improved error debugging**: Log file path now included in error messages and tool description. Log file writes to OS temp directory by default (`PLAYWRITER_LOG_PATH` env var to override)
+
 ## 0.0.16
 
 ### Patch Changes

@@ -1,11 +1,10 @@
 import { startPlayWriterCDPRelayServer } from './extension/cdp-relay.js'
 import fs from 'node:fs'
 import path from 'node:path'
-import { fileURLToPath } from 'node:url'
+import os from 'node:os'
 import util from 'node:util'
 
-const __dirname = path.dirname(fileURLToPath(import.meta.url))
-const logFilePath = path.join(__dirname, '..', 'relay-server.log')
+const logFilePath = process.env.PLAYWRITER_LOG_PATH || path.join(os.tmpdir(), 'playwriter-relay-server.log')
 
 process.title = 'playwriter-ws-server'
 fs.writeFileSync(logFilePath, '')
