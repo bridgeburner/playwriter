@@ -7,7 +7,6 @@
     </picture>
     <br/>
     <br/>
-    <p>Still in development. Not ready to use</p>
     <p>Like Playwright MCP but via extension. 90% less context window. 10x more capable (full playwright API)</p>
     <br/>
     <a href="https://chromewebstore.google.com/detail/playwriter-mcp/jfeammnjpkecdekppnclgkkffahnhfhe">
