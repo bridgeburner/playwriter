@@ -12,6 +12,9 @@ import type { Protocol } from 'devtools-protocol'
 import { imageSize } from 'image-size'
 import { getCDPSessionForPage } from './cdp-session.js'
 
+declare const window: any
+declare const document: any
+
 
 const execAsync = promisify(exec)
 
@@ -1349,7 +1352,7 @@ describe('MCP Server Tests', () => {
         const wsUrl = getCdpUrl()
         const cdpSession = await getCDPSessionForPage({ page: cdpPage!, wsUrl })
 
-        const layoutMetrics = await cdpSession.send<Protocol.Page.GetLayoutMetricsResponse>('Page.getLayoutMetrics')
+        const layoutMetrics = await cdpSession.send('Page.getLayoutMetrics')
 
         const normalized = {
             cssLayoutViewport: layoutMetrics.cssLayoutViewport,
@@ -1429,7 +1432,7 @@ describe('MCP Server Tests', () => {
         const wsUrl = getCdpUrl()
         const client = await getCDPSessionForPage({ page: cdpPage!, wsUrl })
         
-        const layoutMetrics = await client.send<Protocol.Page.GetLayoutMetricsResponse>('Page.getLayoutMetrics')
+        const layoutMetrics = await client.send('Page.getLayoutMetrics')
         expect(layoutMetrics.cssVisualViewport).toBeDefined()
         expect(layoutMetrics.cssVisualViewport.clientWidth).toBeGreaterThan(0)
 
@@ -1601,12 +1604,12 @@ describe('CDP Session Tests', () => {
         const localVars: Record<string, unknown> = {}
 
         if (localScope?.object.objectId) {
-            const { result } = await cdpSession.send<{ result: Protocol.Runtime.PropertyDescriptor[] }>('Runtime.getProperties', {
+            const propsResult = await cdpSession.send('Runtime.getProperties', {
                 objectId: localScope.object.objectId,
                 ownProperties: true,
             })
 
-            for (const prop of result) {
+            for (const prop of propsResult.result) {
                 if (prop.value) {
                     localVars[prop.name] = prop.value.type === 'object'
                         ? `[object ${prop.value.className || prop.value.subtype || 'Object'}]`
@@ -1632,7 +1635,7 @@ describe('CDP Session Tests', () => {
           }
         `)
 
-        const evalResult = await cdpSession.send<{ result: Protocol.Runtime.RemoteObject }>('Debugger.evaluateOnCallFrame', {
+        const evalResult = await cdpSession.send('Debugger.evaluateOnCallFrame', {
             callFrameId: topFrame.callFrameId,
             expression: 'localVar + " world " + numberVar',
         })
@@ -1693,7 +1696,8 @@ describe('CDP Session Tests', () => {
             })()
         `)
 
-        const { profile } = await cdpSession.send<{ profile: Protocol.Profiler.Profile }>('Profiler.stop')
+        const stopResult = await cdpSession.send('Profiler.stop')
+        const profile = stopResult.profile
 
         const functionNames = profile.nodes
             .map(n => n.callFrame.functionName)
@@ -1707,14 +1711,20 @@ describe('CDP Session Tests', () => {
             sampleFunctionNames: functionNames,
         }).toMatchInlineSnapshot(`
           {
-            "durationMicroseconds": 6879,
+            "durationMicroseconds": 8975,
             "hasNodes": true,
-            "nodeCount": 5,
+            "nodeCount": 20,
             "sampleFunctionNames": [
               "(root)",
               "(program)",
-              "evaluate",
               "(idle)",
+              "evaluate",
+              "fibonacci",
+              "fibonacci",
+              "fibonacci",
+              "fibonacci",
+              "fibonacci",
+              "fibonacci",
             ],
           }
         `)
