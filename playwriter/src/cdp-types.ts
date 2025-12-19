@@ -48,6 +48,12 @@ export type CDPEventBase = {
 
 export type CDPMessage = CDPCommand | CDPResponse | CDPEvent;
 
+export type RelayServerEvents = {
+  'cdp:command': (data: { clientId: string; command: CDPCommand }) => void
+  'cdp:event': (data: { event: CDPEventBase; sessionId?: string }) => void
+  'cdp:response': (data: { clientId: string; response: CDPResponseBase; command: CDPCommand }) => void
+}
+
 export { Protocol, ProtocolMapping };
 
 // types tests. to see if types are right with some simple examples

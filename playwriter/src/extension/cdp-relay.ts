@@ -3,9 +3,10 @@ import { serve } from '@hono/node-server'
 import { createNodeWebSocket } from '@hono/node-ws'
 import type { WSContext } from 'hono/ws'
 import type { Protocol } from '../cdp-types.js'
-import type { CDPCommand, CDPResponseBase, CDPEventBase, CDPEventFor } from '../cdp-types.js'
+import type { CDPCommand, CDPResponseBase, CDPEventBase, CDPEventFor, RelayServerEvents } from '../cdp-types.js'
 import type { ExtensionMessage, ExtensionEventMessage } from './protocol.js'
 import chalk from 'chalk'
+import { EventEmitter } from 'node:events'
 
 type ConnectedTarget = {
   sessionId: string
@@ -21,7 +22,14 @@ type PlaywrightClient = {
 }
 
 
-export async function startPlayWriterCDPRelayServer({ port = 19988, host = '127.0.0.1', logger }: { port?: number; host?: string; logger?: { log(...args: any[]): void; error(...args: any[]): void } } = {}) {
+export type RelayServer = {
+  close(): void
+  on<K extends keyof RelayServerEvents>(event: K, listener: RelayServerEvents[K]): void
+  off<K extends keyof RelayServerEvents>(event: K, listener: RelayServerEvents[K]): void
+}
+
+export async function startPlayWriterCDPRelayServer({ port = 19988, host = '127.0.0.1', logger }: { port?: number; host?: string; logger?: { log(...args: any[]): void; error(...args: any[]): void } } = {}): Promise<RelayServer> {
+  const emitter = new EventEmitter()
   const connectedTargets = new Map<string, ConnectedTarget>()
 
   const playwrightClients = new Map<string, PlaywrightClient>()
@@ -314,6 +322,8 @@ export async function startPlayWriterCDPRelayServer({ port = 19988, host = '127.
           id
         })
 
+        emitter.emit('cdp:command', { clientId, command: message })
+
         if (!extensionWs) {
           sendToPlaywright({
             message: {
@@ -395,20 +405,18 @@ export async function startPlayWriterCDPRelayServer({ port = 19988, host = '127.
             }
           }
 
-          sendToPlaywright({
-            message: { id, sessionId, result },
-            clientId
-          })
+          const response: CDPResponseBase = { id, sessionId, result }
+          sendToPlaywright({ message: response, clientId })
+          emitter.emit('cdp:response', { clientId, response, command: message })
         } catch (e) {
           logger?.error('Error handling CDP command:', method, params, e)
-          sendToPlaywright({
-            message: {
-              id,
-              sessionId,
-              error: { message: (e as Error).message }
-            },
-            clientId
-          })
+          const errorResponse: CDPResponseBase = {
+            id,
+            sessionId,
+            error: { message: (e as Error).message }
+          }
+          sendToPlaywright({ message: errorResponse, clientId })
+          emitter.emit('cdp:response', { clientId, response: errorResponse, command: message })
         }
       },
 
@@ -491,6 +499,9 @@ export async function startPlayWriterCDPRelayServer({ port = 19988, host = '127.
             sessionId,
             params
           })
+
+          const cdpEvent: CDPEventBase = { method, sessionId, params }
+          emitter.emit('cdp:event', { event: cdpEvent, sessionId })
 
           if (method === 'Target.attachedToTarget') {
             const targetParams = params as Protocol.Target.AttachedToTargetEvent
@@ -608,6 +619,13 @@ export async function startPlayWriterCDPRelayServer({ port = 19988, host = '127.
       playwrightClients.clear()
       extensionWs?.close(1000, 'Server stopped')
       server.close()
+      emitter.removeAllListeners()
+    },
+    on<K extends keyof RelayServerEvents>(event: K, listener: RelayServerEvents[K]) {
+      emitter.on(event, listener as (...args: unknown[]) => void)
+    },
+    off<K extends keyof RelayServerEvents>(event: K, listener: RelayServerEvents[K]) {
+      emitter.off(event, listener as (...args: unknown[]) => void)
     }
   }
 }

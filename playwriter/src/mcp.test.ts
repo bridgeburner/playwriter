@@ -11,8 +11,9 @@ import type { ExtensionState } from 'mcp-extension/src/types.js'
 import type { Protocol } from 'devtools-protocol'
 import { imageSize } from 'image-size'
 import { getCDPSessionForPage } from './cdp-session.js'
-import { startPlayWriterCDPRelayServer } from './extension/cdp-relay.js'
+import { startPlayWriterCDPRelayServer, type RelayServer } from './extension/cdp-relay.js'
 import { createFileLogger } from './create-logger.js'
+import type { CDPCommand } from './cdp-types.js'
 
 declare const window: any
 declare const document: any
@@ -65,7 +66,7 @@ async function killProcessOnPort(port: number): Promise<void> {
 interface TestContext {
     browserContext: Awaited<ReturnType<typeof chromium.launchPersistentContext>>
     userDataDir: string
-    relayServer: { close(): void }
+    relayServer: RelayServer
 }
 
 async function setupTestContext({ tempDirPrefix }: { tempDirPrefix: string }): Promise<TestContext> {
@@ -1303,6 +1304,14 @@ describe('MCP Server Tests', () => {
 
         await new Promise(r => setTimeout(r, 500))
 
+        const capturedCommands: CDPCommand[] = []
+        const commandHandler = ({ command }: { clientId: string; command: CDPCommand }) => {
+            if (command.method === 'Page.captureScreenshot') {
+                capturedCommands.push(command)
+            }
+        }
+        testCtx!.relayServer.on('cdp:command', commandHandler)
+
         const browser = await chromium.connectOverCDP(getCdpUrl())
         const cdpPage = browser.contexts()[0].pages().find(p => p.url().includes('example.com'))
 
@@ -1332,9 +1341,140 @@ describe('MCP Server Tests', () => {
         expect(fullPageDimensions.height).toBeGreaterThan(0)
         expect(fullPageDimensions.width).toBeGreaterThanOrEqual(viewportDimensions.width!)
 
+        testCtx!.relayServer.off('cdp:command', commandHandler)
+
+        expect(capturedCommands.length).toBe(2)
+        expect(capturedCommands.map(c => ({
+            method: c.method,
+            params: c.params
+        }))).toMatchInlineSnapshot(`
+          [
+            {
+              "method": "Page.captureScreenshot",
+              "params": {
+                "captureBeyondViewport": false,
+                "clip": {
+                  "height": 720,
+                  "scale": 1,
+                  "width": 1280,
+                  "x": 0,
+                  "y": 0,
+                },
+                "format": "png",
+              },
+            },
+            {
+              "method": "Page.captureScreenshot",
+              "params": {
+                "captureBeyondViewport": false,
+                "clip": {
+                  "height": 528,
+                  "scale": 1,
+                  "width": 1280,
+                  "x": 0,
+                  "y": 0,
+                },
+                "format": "png",
+              },
+            },
+          ]
+        `)
+
         const screenshotPath = path.join(os.tmpdir(), 'playwriter-test-screenshot.png')
         fs.writeFileSync(screenshotPath, viewportScreenshot)
         console.log('Screenshot saved to:', screenshotPath)
+
+        await browser.close()
+        await page.close()
+    }, 60000)
+
+    it('should capture element screenshot with correct coordinates', async () => {
+        const browserContext = getBrowserContext()
+        const serviceWorker = await getExtensionServiceWorker(browserContext)
+
+        const target = { x: 200, y: 150, width: 300, height: 100 }
+        const scrolledTarget = { x: 100, y: 1500, width: 200, height: 80 }
+
+        const page = await browserContext.newPage()
+        await page.setContent(`
+            <html>
+                <head>
+                    <style>
+                        body { margin: 0; padding: 0; height: 2000px; }
+                        #target {
+                            position: absolute;
+                            top: ${target.y}px;
+                            left: ${target.x}px;
+                            width: ${target.width}px;
+                            height: ${target.height}px;
+                            background: red;
+                        }
+                        #scrolled-target {
+                            position: absolute;
+                            top: ${scrolledTarget.y}px;
+                            left: ${scrolledTarget.x}px;
+                            width: ${scrolledTarget.width}px;
+                            height: ${scrolledTarget.height}px;
+                            background: blue;
+                        }
+                    </style>
+                </head>
+                <body>
+                    <div id="target">Target Element</div>
+                    <div id="scrolled-target">Scrolled Target</div>
+                </body>
+            </html>
+        `)
+        await page.bringToFront()
+
+        await serviceWorker.evaluate(async () => {
+            await globalThis.toggleExtensionForActiveTab()
+        })
+
+        await new Promise(r => setTimeout(r, 500))
+
+        const capturedCommands: CDPCommand[] = []
+        const commandHandler = ({ command }: { clientId: string; command: CDPCommand }) => {
+            if (command.method === 'Page.captureScreenshot') {
+                capturedCommands.push(command)
+            }
+        }
+        testCtx!.relayServer.on('cdp:command', commandHandler)
+
+        const browser = await chromium.connectOverCDP(getCdpUrl())
+        let cdpPage
+        for (const p of browser.contexts()[0].pages()) {
+            const html = await p.content()
+            if (html.includes('scrolled-target')) {
+                cdpPage = p
+                break
+            }
+        }
+        expect(cdpPage).toBeDefined()
+
+        await cdpPage!.locator('#target').screenshot()
+
+        await cdpPage!.locator('#scrolled-target').screenshot()
+
+        testCtx!.relayServer.off('cdp:command', commandHandler)
+
+        expect(capturedCommands.length).toBe(2)
+
+        const targetCmd = capturedCommands[0]
+        expect(targetCmd.method).toBe('Page.captureScreenshot')
+        const targetClip = (targetCmd.params as any).clip
+        expect(targetClip.x).toBe(target.x)
+        expect(targetClip.y).toBe(target.y)
+        expect(targetClip.width).toBe(target.width)
+        expect(targetClip.height).toBe(target.height)
+
+        const scrolledCmd = capturedCommands[1]
+        expect(scrolledCmd.method).toBe('Page.captureScreenshot')
+        const scrolledClip = (scrolledCmd.params as any).clip
+        expect(scrolledClip.x).toBe(scrolledTarget.x)
+        expect(scrolledClip.y).toBe(scrolledTarget.y)
+        expect(scrolledClip.width).toBe(scrolledTarget.width)
+        expect(scrolledClip.height).toBe(scrolledTarget.height)
 
         await browser.close()
         await page.close()
@@ -1774,9 +1914,9 @@ describe('CDP Session Tests', () => {
             sampleFunctionNames: functionNames,
         }).toMatchInlineSnapshot(`
           {
-            "durationMicroseconds": 12993,
+            "durationMicroseconds": 8646,
             "hasNodes": true,
-            "nodeCount": 21,
+            "nodeCount": 20,
             "sampleFunctionNames": [
               "(root)",
               "(program)",
