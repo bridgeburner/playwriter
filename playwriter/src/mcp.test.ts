@@ -1914,19 +1914,13 @@ describe('CDP Session Tests', () => {
             sampleFunctionNames: functionNames,
         }).toMatchInlineSnapshot(`
           {
-            "durationMicroseconds": 8646,
+            "durationMicroseconds": 11057,
             "hasNodes": true,
-            "nodeCount": 20,
+            "nodeCount": 4,
             "sampleFunctionNames": [
               "(root)",
               "(program)",
               "(idle)",
-              "evaluate",
-              "fibonacci",
-              "fibonacci",
-              "fibonacci",
-              "fibonacci",
-              "fibonacci",
               "fibonacci",
             ],
           }

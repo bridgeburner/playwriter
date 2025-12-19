@@ -19,9 +19,19 @@ export function ensureDataDir(): string {
   return dataDir
 }
 
-export function getLogFilePath(): string {
-  return process.env.PLAYWRITER_LOG_PATH || path.join(getDataDir(), 'relay-server.log')
+function getLogsDir(): string {
+  return path.join(getDataDir(), 'logs')
 }
+
+function getLogFilePath(): string {
+  if (process.env.PLAYWRITER_LOG_PATH) {
+    return process.env.PLAYWRITER_LOG_PATH
+  }
+  const timestamp = new Date().toISOString().replace(/[:.]/g, '-')
+  return path.join(getLogsDir(), `relay-server-${timestamp}.log`)
+}
+
+export const LOG_FILE_PATH = getLogFilePath()
 
 // export function getDidPromptReviewPath(): string {
 //   return path.join(getDataDir(), 'did-prompt-review')

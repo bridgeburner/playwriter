@@ -1,5 +1,13 @@
 # Changelog
 
+## 0.0.20
+
+### Patch Changes
+
+- **Timestamped log files**: Log files now include timestamps in filename (`relay-server-{timestamp}.log`) instead of overwriting a single file
+- **Automatic log cleanup**: Keeps only the 10 most recent log files, deleting older ones automatically
+- **Async log writes**: Logger now uses a queue for async file writes instead of blocking sync writes
+
 ## 0.0.19
 
 ### Patch Changes

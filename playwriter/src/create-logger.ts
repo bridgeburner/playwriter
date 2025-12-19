@@ -1,26 +1,56 @@
 import fs from 'node:fs'
+import path from 'node:path'
 import util from 'node:util'
-import { ensureDataDir, getLogFilePath } from './utils.js'
+import { LOG_FILE_PATH } from './utils.js'
 
 export type Logger = {
-  log(...args: unknown[]): void
-  error(...args: unknown[]): void
+  log(...args: unknown[]): Promise<void>
+  error(...args: unknown[]): Promise<void>
+  logFilePath: string
+}
+
+function cleanupOldLogs(logsDir: string): void {
+  if (!fs.existsSync(logsDir)) {
+    return
+  }
+  const files = fs.readdirSync(logsDir)
+    .filter((f) => f.startsWith('relay-server-') && f.endsWith('.log'))
+    .map((f) => ({
+      name: f,
+      path: path.join(logsDir, f),
+      mtime: fs.statSync(path.join(logsDir, f)).mtime.getTime(),
+    }))
+    .sort((a, b) => b.mtime - a.mtime)
+  
+  if (files.length > 10) {
+    files.slice(10).forEach((f) => {
+      fs.unlinkSync(f.path)
+    })
+  }
 }
 
 export function createFileLogger({ logFilePath }: { logFilePath?: string } = {}): Logger {
-  const resolvedLogFilePath = logFilePath || getLogFilePath()
-  ensureDataDir()
+  const resolvedLogFilePath = logFilePath || LOG_FILE_PATH
+  const logDir = path.dirname(resolvedLogFilePath)
+  if (!fs.existsSync(logDir)) {
+    fs.mkdirSync(logDir, { recursive: true })
+  }
+  cleanupOldLogs(logDir)
   fs.writeFileSync(resolvedLogFilePath, '')
 
-  const log = (...args: unknown[]) => {
+  let queue: Promise<void> = Promise.resolve()
+
+  const log = (...args: unknown[]): Promise<void> => {
     const message = args.map(arg =>
       typeof arg === 'string' ? arg : util.inspect(arg, { depth: null, colors: false })
     ).join(' ')
-    fs.appendFileSync(resolvedLogFilePath, message + '\n')
+    queue = queue.then(() => fs.promises.appendFile(resolvedLogFilePath, message + '\n'))
+    return queue
   }
 
   return {
     log,
-    error: log
+    error: log,
+    logFilePath: resolvedLogFilePath,
   }
 }

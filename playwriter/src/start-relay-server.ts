@@ -1,11 +1,9 @@
 import { startPlayWriterCDPRelayServer } from './extension/cdp-relay.js'
 import { createFileLogger } from './create-logger.js'
-import { getLogFilePath } from './utils.js'
 
-const logFilePath = getLogFilePath()
 process.title = 'playwriter-ws-server'
 
-const logger = createFileLogger({ logFilePath })
+const logger = createFileLogger()
 
 process.on('uncaughtException', async (err) => {
   await logger.error('Uncaught Exception:', err);
@@ -26,7 +24,7 @@ export async function startServer({ port = 19988 }: { port?: number } = {}) {
   const server = await startPlayWriterCDPRelayServer({ port, logger })
 
   console.log('CDP Relay Server running. Press Ctrl+C to stop.')
-  console.log('Logs are being written to:', logFilePath)
+  console.log('Logs are being written to:', logger.logFilePath)
 
   process.on('SIGINT', () => {
     console.log('\nShutting down...')
