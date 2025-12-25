@@ -395,7 +395,10 @@ server.resource('debugger-api', 'playwriter://debugger-api', { mimeType: 'text/p
   const packageJsonPath = require.resolve('playwriter/package.json')
   const distDir = path.join(path.dirname(packageJsonPath), 'dist')
 
-  const debuggerTypes = fs.readFileSync(path.join(distDir, 'debugger.d.ts'), 'utf-8')
+  const debuggerTypes = fs
+    .readFileSync(path.join(distDir, 'debugger.d.ts'), 'utf-8')
+    .replace(/\/\/# sourceMappingURL=.*$/gm, '')
+    .trim()
   const debuggerExamples = fs.readFileSync(path.join(distDir, 'debugger-examples.ts'), 'utf-8')
 
   return {

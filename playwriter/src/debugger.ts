@@ -42,7 +42,7 @@ export interface ScriptInfo {
  * const cdp = await getCDPSessionForPage({ page, wsUrl })
  * const dbg = new Debugger({ cdp })
  *
- * await dbg.setBreakpoint({ file: '/path/to/file.js', line: 42 })
+ * await dbg.setBreakpoint({ file: 'https://example.com/app.js', line: 42 })
  * // trigger the code path, then:
  * const location = await dbg.getLocation()
  * const vars = await dbg.inspectVariables()
@@ -115,17 +115,17 @@ export class Debugger {
   }
 
   /**
-   * Sets a breakpoint at a specified file and line number.
-   * The file path is automatically converted to a file:// URL if needed.
+   * Sets a breakpoint at a specified URL and line number.
+   * Use the URL from listScripts() to find available scripts.
    *
    * @param options - Breakpoint options
-   * @param options.file - Absolute file path or URL
+   * @param options.file - Script URL (e.g. https://example.com/app.js)
    * @param options.line - Line number (1-based)
    * @returns The breakpoint ID for later removal
    *
    * @example
    * ```ts
-   * const id = await dbg.setBreakpoint({ file: '/app/src/index.js', line: 42 })
+   * const id = await dbg.setBreakpoint({ file: 'https://example.com/app.js', line: 42 })
    * // later:
    * await dbg.deleteBreakpoint({ breakpointId: id })
    * ```
@@ -173,7 +173,7 @@ export class Debugger {
    * @example
    * ```ts
    * const breakpoints = dbg.listBreakpoints()
-   * // [{ id: 'bp-123', file: '/app/index.js', line: 42 }]
+   * // [{ id: 'bp-123', file: 'https://example.com/index.js', line: 42 }]
    * ```
    */
   listBreakpoints(): BreakpointInfo[] {
@@ -322,7 +322,7 @@ export class Debugger {
    * @example
    * ```ts
    * const location = await dbg.getLocation()
-   * console.log(location.url)          // '/app/src/index.js'
+   * console.log(location.url)          // 'https://example.com/src/index.js'
    * console.log(location.lineNumber)   // 42
    * console.log(location.callstack)    // [{ functionName: 'handleRequest', ... }]
    * console.log(location.sourceContext)
