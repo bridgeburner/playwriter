@@ -11,6 +11,7 @@ import type { ExtensionState } from 'mcp-extension/src/types.js'
 import type { Protocol } from 'devtools-protocol'
 import { imageSize } from 'image-size'
 import { getCDPSessionForPage } from './cdp-session.js'
+import { Debugger } from './debugger.js'
 import { startPlayWriterCDPRelayServer, type RelayServer } from './extension/cdp-relay.js'
 import { createFileLogger } from './create-logger.js'
 import type { CDPCommand } from './cdp-types.js'
@@ -1782,7 +1783,7 @@ describe('CDP Session Tests', () => {
         return testCtx.browserContext
     }
 
-    it('should enable debugger and pause on debugger statement via CDP session', async () => {
+    it('should use Debugger class to set breakpoints and inspect variables', async () => {
         const browserContext = getBrowserContext()
         const serviceWorker = await getExtensionServiceWorker(browserContext)
 
@@ -1801,11 +1802,15 @@ describe('CDP Session Tests', () => {
 
         const wsUrl = getCdpUrl()
         const cdpSession = await getCDPSessionForPage({ page: cdpPage!, wsUrl })
-        await cdpSession.send('Debugger.enable')
+        const dbg = new Debugger({ cdp: cdpSession })
 
-        const pausedPromise = new Promise<Protocol.Debugger.PausedEvent>((resolve) => {
-            cdpSession.on('Debugger.paused', (params) => {
-                resolve(params as Protocol.Debugger.PausedEvent)
+        await dbg.enable()
+
+        expect(dbg.isPaused()).toBe(false)
+
+        const pausedPromise = new Promise<void>((resolve) => {
+            cdpSession.on('Debugger.paused', () => {
+                resolve()
             })
         })
 
@@ -1813,106 +1818,208 @@ describe('CDP Session Tests', () => {
             (function testFunction() {
                 const localVar = 'hello';
                 const numberVar = 42;
-                const objVar = { key: 'value', nested: { a: 1 } };
                 debugger;
                 return localVar + numberVar;
             })()
         `)
 
-        const pausedEvent = await Promise.race([
+        await Promise.race([
             pausedPromise,
             new Promise<never>((_, reject) => setTimeout(() => reject(new Error('Debugger.paused timeout')), 5000))
         ])
 
-        const stackTrace = pausedEvent.callFrames.map(frame => ({
-            functionName: frame.functionName || '(anonymous)',
-            lineNumber: frame.location.lineNumber,
-            columnNumber: frame.location.columnNumber,
-        }))
+        expect(dbg.isPaused()).toBe(true)
 
-        expect({
-            reason: pausedEvent.reason,
-            stackTrace: stackTrace.slice(0, 3),
-        }).toMatchInlineSnapshot(`
+        const location = await dbg.getLocation()
+        expect(location.callstack[0].functionName).toBe('testFunction')
+        expect(location.sourceContext).toContain('debugger')
+
+        const vars = await dbg.inspectVariables({ scope: 'local' })
+        expect(vars.local).toMatchInlineSnapshot(`
           {
-            "reason": "other",
-            "stackTrace": [
-              {
-                "columnNumber": 16,
-                "functionName": "testFunction",
-                "lineNumber": 4,
-              },
-              {
-                "columnNumber": 14,
-                "functionName": "(anonymous)",
-                "lineNumber": 6,
-              },
-              {
-                "columnNumber": 29,
-                "functionName": "evaluate",
-                "lineNumber": 289,
-              },
-            ],
+            "localVar": "hello",
+            "numberVar": 42,
           }
         `)
 
-        const topFrame = pausedEvent.callFrames[0]
-        const scopeChain = topFrame.scopeChain
+        const evalResult = await dbg.evaluate({ expression: 'localVar + " world"' })
+        expect(evalResult.value).toBe('hello world')
 
-        const localScope = scopeChain.find(s => s.type === 'local')
-        const localVars: Record<string, unknown> = {}
+        await dbg.resume()
+        expect(dbg.isPaused()).toBe(false)
 
-        if (localScope?.object.objectId) {
-            const propsResult = await cdpSession.send('Runtime.getProperties', {
-                objectId: localScope.object.objectId,
-                ownProperties: true,
-            })
+        cdpSession.close()
+        await browser.close()
+        await page.close()
+    }, 60000)
 
-            for (const prop of propsResult.result) {
-                if (prop.value) {
-                    localVars[prop.name] = prop.value.type === 'object'
-                        ? `[object ${prop.value.className || prop.value.subtype || 'Object'}]`
-                        : prop.value.value
-                }
-            }
+    it('should list scripts with Debugger class', async () => {
+        const browserContext = getBrowserContext()
+        const serviceWorker = await getExtensionServiceWorker(browserContext)
+
+        const page = await browserContext.newPage()
+        await page.goto('https://news.ycombinator.com/')
+        await page.bringToFront()
+
+        await serviceWorker.evaluate(async () => {
+            await globalThis.toggleExtensionForActiveTab()
+        })
+        await new Promise(r => setTimeout(r, 500))
+
+        const browser = await chromium.connectOverCDP(getCdpUrl())
+        const cdpPage = browser.contexts()[0].pages().find(p => p.url().includes('news.ycombinator.com'))
+        expect(cdpPage).toBeDefined()
+
+        const wsUrl = getCdpUrl()
+        const cdpSession = await getCDPSessionForPage({ page: cdpPage!, wsUrl })
+        const dbg = new Debugger({ cdp: cdpSession })
+
+        await dbg.enable()
+
+        await cdpPage!.reload({ waitUntil: 'networkidle' })
+
+        for (let i = 0; i < 20; i++) {
+            if (dbg.listScripts().length > 0) break
+            await new Promise(r => setTimeout(r, 100))
         }
 
-        expect({
-            scopeTypes: scopeChain.map(s => s.type),
-            localVariables: localVars,
-        }).toMatchInlineSnapshot(`
-          {
-            "localVariables": {
-              "localVar": "hello",
-              "numberVar": 42,
-              "objVar": "[object Object]",
-            },
-            "scopeTypes": [
-              "local",
-              "global",
-            ],
-          }
-        `)
+        const scripts = dbg.listScripts()
+        expect(scripts.length).toBeGreaterThan(0)
+        expect(scripts[0]).toHaveProperty('scriptId')
+        expect(scripts[0]).toHaveProperty('url')
 
-        const evalResult = await cdpSession.send('Debugger.evaluateOnCallFrame', {
-            callFrameId: topFrame.callFrameId,
-            expression: 'localVar + " world " + numberVar',
+        const hnScripts = dbg.listScripts({ search: 'hn' })
+        expect(hnScripts.length).toBeGreaterThan(0)
+
+        cdpSession.close()
+        await browser.close()
+        await page.close()
+    }, 60000)
+
+    it('should manage breakpoints with Debugger class', async () => {
+        const browserContext = getBrowserContext()
+        const serviceWorker = await getExtensionServiceWorker(browserContext)
+
+        const page = await browserContext.newPage()
+        await page.setContent(`
+            <html>
+                <head>
+                    <script src="data:text/javascript,function testFunc() { return 42; }"></script>
+                </head>
+                <body></body>
+            </html>
+        `)
+        await page.bringToFront()
+
+        await serviceWorker.evaluate(async () => {
+            await globalThis.toggleExtensionForActiveTab()
+        })
+        await new Promise(r => setTimeout(r, 500))
+
+        const browser = await chromium.connectOverCDP(getCdpUrl())
+        let cdpPage
+        for (const p of browser.contexts()[0].pages()) {
+            const html = await p.content()
+            if (html.includes('testFunc')) {
+                cdpPage = p
+                break
+            }
+        }
+        expect(cdpPage).toBeDefined()
+
+        const wsUrl = getCdpUrl()
+        const cdpSession = await getCDPSessionForPage({ page: cdpPage!, wsUrl })
+        const dbg = new Debugger({ cdp: cdpSession })
+
+        await dbg.enable()
+
+        expect(dbg.listBreakpoints()).toHaveLength(0)
+
+        const bpId = await dbg.setBreakpoint({ file: 'https://example.com/test.js', line: 1 })
+        expect(typeof bpId).toBe('string')
+        expect(dbg.listBreakpoints()).toHaveLength(1)
+        expect(dbg.listBreakpoints()[0]).toMatchObject({
+            id: bpId,
+            file: 'https://example.com/test.js',
+            line: 1,
         })
 
-        expect({
-            evaluatedExpression: 'localVar + " world " + numberVar',
-            result: evalResult.result.value,
-            type: evalResult.result.type,
-        }).toMatchInlineSnapshot(`
-          {
-            "evaluatedExpression": "localVar + " world " + numberVar",
-            "result": "hello world 42",
-            "type": "string",
-          }
+        await dbg.deleteBreakpoint({ breakpointId: bpId })
+        expect(dbg.listBreakpoints()).toHaveLength(0)
+
+        cdpSession.close()
+        await browser.close()
+        await page.close()
+    }, 60000)
+
+    it('should step through code with Debugger class', async () => {
+        const browserContext = getBrowserContext()
+        const serviceWorker = await getExtensionServiceWorker(browserContext)
+
+        const page = await browserContext.newPage()
+        await page.goto('https://example.com/')
+        await page.bringToFront()
+
+        await serviceWorker.evaluate(async () => {
+            await globalThis.toggleExtensionForActiveTab()
+        })
+        await new Promise(r => setTimeout(r, 500))
+
+        const browser = await chromium.connectOverCDP(getCdpUrl())
+        const cdpPage = browser.contexts()[0].pages().find(p => p.url().includes('example.com'))
+        expect(cdpPage).toBeDefined()
+
+        const wsUrl = getCdpUrl()
+        const cdpSession = await getCDPSessionForPage({ page: cdpPage!, wsUrl })
+        const dbg = new Debugger({ cdp: cdpSession })
+
+        await dbg.enable()
+
+        const pausedPromise = new Promise<void>((resolve) => {
+            cdpSession.on('Debugger.paused', () => resolve())
+        })
+
+        cdpPage!.evaluate(`
+            (function outer() {
+                function inner() {
+                    const x = 1;
+                    debugger;
+                    const y = 2;
+                    return x + y;
+                }
+                const result = inner();
+                return result;
+            })()
         `)
 
-        await cdpSession.send('Debugger.resume')
-        await cdpSession.send('Debugger.disable')
+        await pausedPromise
+        expect(dbg.isPaused()).toBe(true)
+
+        const location1 = await dbg.getLocation()
+        expect(location1.callstack.length).toBeGreaterThanOrEqual(2)
+        expect(location1.callstack[0].functionName).toBe('inner')
+        expect(location1.callstack[1].functionName).toBe('outer')
+
+        const stepOverPromise = new Promise<void>((resolve) => {
+            cdpSession.on('Debugger.paused', () => resolve())
+        })
+        await dbg.stepOver()
+        await stepOverPromise
+
+        const location2 = await dbg.getLocation()
+        expect(location2.lineNumber).toBeGreaterThan(location1.lineNumber)
+
+        const stepOutPromise = new Promise<void>((resolve) => {
+            cdpSession.on('Debugger.paused', () => resolve())
+        })
+        await dbg.stepOut()
+        await stepOutPromise
+
+        const location3 = await dbg.getLocation()
+        expect(location3.callstack[0].functionName).toBe('outer')
+
+        await dbg.resume()
+
         cdpSession.close()
         await browser.close()
         await page.close()
