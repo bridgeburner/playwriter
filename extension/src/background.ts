@@ -772,7 +772,7 @@ const icons = {
       '48': '/icons/icon-gray-48.png',
       '128': '/icons/icon-gray-128.png',
     },
-    title: 'Connecting...',
+    title: 'Waiting for MCP WS server...',
     badgeText: '...',
     badgeColor: [0, 0, 0, 0] as [number, number, number, number],
   },
