@@ -8,6 +8,7 @@
   - `enable()` now disables first then re-enables to force CDP to emit `scriptParsed` and `styleSheetAdded` events
   - Added 100ms debounced wait for events to arrive before returning
   - `listScripts()` and `list()` are now async and auto-call `enable()`
+- **Bun/bunx compatibility**: Removed known issue about bunx - the MCP now works with both `npx` and `bunx`
 
 ## 0.0.28
 
