@@ -839,13 +839,13 @@ server.tool(
 server.tool(
   'reset',
   dedent`
-    Recreates the CDP connection and resets the browser/page/context. Use this when the MCP stops responding, you get connection errors, assertion failures, page closed, or timeout issues.
+    Recreates the CDP connection and resets the browser/page/context. Use this when the MCP stops responding, you get connection errors, if there are no pages in context, assertion failures, page closed, or other issues.
 
     After calling this tool, the page and context variables are automatically updated in the execution environment.
 
-    IMPORTANT: this completely resets the execution context, removing any custom properties you may have added to the global scope AND clearing all keys from the \`state\` object. Only \`page\`, \`context\`, \`state\` (empty), \`console\`, and utility functions will remain.
+    This tools also removes any custom properties you may have added to the global scope AND clearing all keys from the \`state\` object. Only \`page\`, \`context\`, \`state\` (empty), \`console\`, and utility functions will remain.
 
-    if playwright always returns all pages as about:blank urls and evaluate does not work you should aks the user to restart Chrome. This is a known Chrome bug.
+    if playwright always returns all pages as about:blank urls and evaluate does not work you should ask the user to restart Chrome. This is a known Chrome bug.
   `,
   {},
   async () => {
