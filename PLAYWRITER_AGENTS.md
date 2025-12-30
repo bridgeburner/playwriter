@@ -30,6 +30,8 @@ write code that will run on all platforms: mac, linux, windows. especially aroun
 
 extension/ contains the chrome extension code. you need to run `pnpm build` to make it ready to be loaded in chrome. the extension folder chrome will use is extension/dist
 
+when I ask you to release extension run package.json release script
+
 playwriter contains the ws server and MCP code. also the tests for the mcp are there. playwriter/src/prompt.md contains the docs for the MCP the agent will use. you should add there important sections that help the agent control the browser well with the MCP interface 
 
 playwriter/src/resource.md is for more generic knowledge about playwright that the agent can use when necessary, for things like best practices for selecting locators on the page
