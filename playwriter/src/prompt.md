@@ -177,7 +177,7 @@ console.log(snapshot)
 
 ## getting outputs of code execution
 
-You can use `console.log` to print values you want to see in the tool call result. For seeing logs across runs you can store then in `state.logs` and then print them later, filtering and paginating them too.
+You can use `console.log` to print values you want to see in the tool call result. For seeing logs across runs you can store strings in `state.logs` and then print them later, filtering and paginating them too.
 
 ## using page.evaluate
 
@@ -198,22 +198,6 @@ const pageInfo = await page.evaluate(() => ({
 }))
 console.log(pageInfo)
 ```
-
-## read logs during interactions
-
-you can see logs during interactions with `page.on('console', msg => console.log(`Browser log: [${msg.type()}] ${msg.text()}`))`
-
-then remember to call `context.removeAllListeners()` or `page.removeAllListeners('console')` to not see logs in next execute calls.
-
-## reading past logs
-
-you can keep track of logs using `state.logs = []; page.on('console', msg => state.logs.push({ type: msg.type(), text: msg.text() }))`
-
-later, you can read logs that you care about. For example, to get the last 100 logs that contain the word "error":
-
-`console.log('errors:'); state.logs.filter(log => log.type === 'error').slice(-100).forEach(x => console.log(x))`
-
-then to reset logs: `state.logs = []` and to stop listening: `page.removeAllListeners('console')`
 
 ## using getLatestLogs to read browser console logs
 
